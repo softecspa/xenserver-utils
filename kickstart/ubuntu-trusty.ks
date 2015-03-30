@@ -1,6 +1,7 @@
-# Ubuntu 14.04 LTS kickstart for XenServer
-# branch: develop
-##########################################
+############################################
+# Ubuntu 14.04 LTS kickstart for XenServer #
+# branch: develop                          #
+############################################
 
 # Install, not upgrade
 install
@@ -13,7 +14,7 @@ lang it_IT
 langsupport it_IT
 keyboard it
 
-# Configure networking without IPv6, firewall off
+# Configure networking
 
 # for STATIC IP: uncomment and configure
 # network --device=eth0 --bootproto=static --ip=192.168.###.### --netmask=255.255.255.0 --gateway=192.168.###.### --nameserver=###.###.###.### --noipv6 --hostname=$$$
@@ -37,12 +38,40 @@ skipx
 text
 
 # Setup the disk
-zerombr yes
-clearpart --all
-part /boot --fstype=ext3 --size=256 --asprimary
-part swap --size 1024
-part / --fstype=ext4 --grow --size=6144 --asprimary
-bootloader --location=mbr
+
+#zerombr yes
+#clearpart --all
+#part /boot --fstype=ext3 --size=256 --asprimary
+#part swap --size 1024
+#part / --fstype=ext4 --grow --size=6144 --asprimary
+#bootloader --location=mbr
+
+d-i partman-auto/choose_recipe select swap-root
+d-i partman-auto/disk string /dev/xvda
+d-i partman-auto/method string lvm
+d-i partman-auto-lvm/guided_size string 90%
+
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-auto-lvm/no_boot boolean true
+
+d-i partman-auto-lvm/new_vg_name string vg_mainvg
+
+d-i partman-auto/expert_recipe string               \
+    swap-root ::                                    \
+    1024 1024 1024 linux-swap method{ swap }        \
+    format{ } $lvmok{ } lv_name{ lv_swap }          \
+    .                                               \
+    1 10240 10000000000 ext4 method{ lvm }          \
+    $lvmok{ } mountpoint{ / } lv_name{ lv_root }    \
+    format{ } use_filesystem{ } filesystem{ ext4 }  \
+    .
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select Finish
+d-i partman/confirm_nooverwrite boolean true
+d-i partman/confirm boolean true
 
 # Shutdown when the kickstart is done
 halt
@@ -102,6 +131,8 @@ echo .
 
 # generalization
 echo -n "Generalizing"
+apt-get -qq -y autoremove
+apt-get clean
 rm -f /etc/ssh/ssh_host_*
 rm -f /var/cache/apt/archives/*.deb
 rm -f /var/cache/apt/*cache.bin
