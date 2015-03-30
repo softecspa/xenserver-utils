@@ -49,21 +49,21 @@ text
 d-i partman-auto/choose_recipe select swap-root
 d-i partman-auto/disk string /dev/xvda
 d-i partman-auto/method string lvm
-d-i partman-auto-lvm/guided_size string 90%
+#d-i partman-auto-lvm/guided_size string 90%
 
 d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-md/device_remove_md boolean true
 d-i partman-auto-lvm/no_boot boolean true
 
-d-i partman-auto-lvm/new_vg_name string vg_mainvg
+d-i partman-auto-lvm/new_vg_name string mainvg
 
 d-i partman-auto/expert_recipe string               \
     swap-root ::                                    \
     1024 1024 1024 linux-swap method{ swap }        \
-    format{ } $lvmok{ } lv_name{ lv_swap }          \
+    format{ } $lvmok{ } lv_name{ swap }          \
     .                                               \
     1 10240 10000000000 ext4 method{ lvm }          \
-    $lvmok{ } mountpoint{ / } lv_name{ lv_root }    \
+    $lvmok{ } mountpoint{ / } lv_name{ root }    \
     format{ } use_filesystem{ } filesystem{ ext4 }  \
     .
 d-i partman-lvm/confirm_nooverwrite boolean true
