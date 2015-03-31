@@ -79,30 +79,18 @@ apt-get remove -y linux-firmware
 dpkg -l | grep extra | grep linux | awk '{print $2}' | xargs apt-get remove -y
 echo .
 
-echo -n "Network fixes"
 # For cloud images, 'eth0' _is_ the predictable device name, since
 # we don't want to be tied to specific virtual (!) hardware
+echo -n "Network fixes"
 rm -f /etc/udev/rules.d/70*
 ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules
 echo .
 
-# Generic localhost names
-echo "localhost.localdomain" > /etc/hostname
-echo .
-cat > /etc/hosts << EOF
-127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
-::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
-
-EOF
-echo .
-
-# Utility scripts
-echo -n "Utility scripts"
-wget -O /opt/domu-hostname.sh https://github.com/frederickding/xenserver-kickstart/raw/develop/opt/domu-hostname.sh
-chmod +x /opt/domu-hostname.sh
+# Set hostname
+curl -s https://raw.githubusercontent.com/softecspa/xenserver-utils/master/kickstart/domu-hostname | /bin/sh
 
 # SSH
-echo -n "Replacement SSH host keys"
+echo -n "SSH host keys"
 rm -f /etc/ssh/ssh_host_*
 dpkg-reconfigure openssh-server
 echo .
