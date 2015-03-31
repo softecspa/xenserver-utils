@@ -13,11 +13,12 @@ ff02::2     ip6-allrouters
 EOF
 
 echo localhost > /etc/hostname
+/bin/hostname -F /etc/hostname
 
 XENSTOREREAD=`which xenstore-read`
 if [ -e ${XENSTOREREAD} ]; then
     # Filter the domU's name to a lowercase alphanumeric hyphenated hostname
-    NAME=`xenstore-read name | sed -e 's/[^[:alnum:]|-]/-/g' | tr '[:upper:]' '[:lower:]'`
+    NAME=`xenstore-read name 2>/dev/null | sed -e 's/[^[:alnum:]|-]/-/g' | tr '[:upper:]' '[:lower:]'`
 
     # Don't do anything if this name is blank
     [ "${NAME}" = "" ] && exit 0
