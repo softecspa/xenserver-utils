@@ -1,0 +1,31 @@
+#!/bin/bash
+# Based on https://raw.githubusercontent.com/frederickding/xenserver-kickstart/develop/opt/domu-hostname.sh
+# Adapted by Lorenzo Cocchi
+
+cat > /etc/hosts << EOF
+127.0.0.1   localhost
+
+::1         ip6-localhost   ip6-loopback
+fe00::0     ip6-localnet
+ff00::0     ip6-mcastprefix
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+EOF
+
+echo localhost > /etc/hostname
+
+XENSTOREREAD=`which xenstore-read`
+if [ -e ${XENSTOREREAD} ]; then
+    # Filter the domU's name to a lowercase alphanumeric hyphenated hostname
+    NAME=`xenstore-read name | sed -e 's/[^[:alnum:]|-]/-/g' | tr '[:upper:]' '[:lower:]'`
+
+    # Don't do anything if this name is blank
+    [ "${NAME}" = "" ] && exit 0
+
+    # Set the hostname
+    echo "${NAME}" > /etc/hostname
+    echo -e "\n127.0.1.1\t${NAME}.softecspa.it\t${NAME}" >> /etc/hosts
+    /bin/hostname -F /etc/hostname
+fi
+
+exit 0
