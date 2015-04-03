@@ -6,6 +6,7 @@ except ImportError as e:
     raise SystemExit('Import Error: %s' % e)
 
 import sys
+import traceback
 
 __version__ = (0, 0, 1)
 __author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
@@ -98,7 +99,7 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
         script_name = sys.argv[0]
         usage = ('Usage: %s hostname username password')
-        usage_ex = ('Ex.: %s 192.168.33.52 r0ot foobar')
+        usage_ex = ('Ex.: %s 192.168.33.52 r00t foobar')
         print(usage % script_name)
         print(usage_ex % script_name)
         sys.exit(1)
@@ -120,31 +121,51 @@ if __name__ == '__main__':
     try:
         vms = get_all_vm(session)
 
+        vm_fields = (
+            'name_label',
+            'uuid',
+            'power_state',
+            'resident_on_hostname',
+            'VCPUs_max'
+        )
+
+        disk_fields = (
+            'uuid',
+            'size',
+            'sr_name',
+            'sr_type'
+        )
+
+        f_commessa = 'XenCenter.CustomFields.commessa'
+
         for vm in vms:
             if vm_filter(session, vm) is not None:
                 vm_dict = session.xenapi.VM.get_record(vm)
-                vmhostref = vm_dict['resident_on']
 
+                vmhostref = vm_dict['resident_on']
                 if vmhostref == 'OpaqueRef:NULL':
-                    resident_on = 'NULL'
+                    vm_dict['resident_on_hostname'] = 'NULL'
                 else:
-                    resident_on = vmhostref = \
+                    vm_dict['resident_on_hostname'] = vmhostref = \
                         session.xenapi.host.get_name_label(vmhostref)
 
-                print('%-15s: %s' % ('name_label', vm_dict['name_label']))
-                print('%-15s: %s' % ('uuid', vm_dict['uuid']))
-                # print('%-15s: %s' % ('vdbs', vm_dict['VBDs']))
-                print('%-15s: %s' % ('power_state', vm_dict['power_state']))
-                print('%-15s: %s' % ('resident_on', resident_on))
+                if f_commessa in vm_dict['other_config']:
+                    vm_dict['commessa'] = vm_dict['other_config'][f_commessa]
+                else:
+                    vm_dict['commessa'] = 'NULL'
+
+                for f in vm_fields:
+                    print('%-30s: %s' % ('vm_' + f.lower(), vm_dict[f]))
 
                 for vbd in vm_dict['VBDs']:
                     for vdi in get_vdi_from_vbd(session, vbd):
-                        for k in ('uuid', 'size', 'sr_name', 'sr_type'):
-                            print('%-15s: %s' % ('disk_' + k, vdi[k]))
+                        for f in disk_fields:
+                            print('%-30s: %s' % ('disk_' + f.lower(), vdi[f]))
 
                 print('\n')
     except Exception as e:
-        raise SystemExit(e)
+        traceback.print_exc(limit=1, file=sys.stderr)
+        raise SystemExit()
     finally:
         try:
             session.logut()
