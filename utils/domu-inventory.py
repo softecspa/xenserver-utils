@@ -8,6 +8,7 @@ except ImportError as e:
 import sys
 import traceback
 
+
 __version__ = (0, 0, 1)
 __author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
 
@@ -66,33 +67,30 @@ def vm_filter(session, vm, power_state=None):
 
 
 def get_vdi_from_vbd(session, vdb, vbd_type='Disk'):
-    vdi_list = []
+    vdi_record = {}
     vbd_record = session.xenapi.VBD.get_record(vdb)
 
     if vbd_record['type'] == vbd_type:
-
         vdi = vbd_record['VDI']
-        vdivbds = session.xenapi.VDI.get_VBDs(vdi)
-        vdisr = session.xenapi.VDI.get_SR(vdi)
-        vdisize = session.xenapi.VDI.get_virtual_size(vdi)
+        vdi_sr = session.xenapi.VDI.get_SR(vdi)
 
-        for vbd in vdivbds:
-            vdivm = session.xenapi.VBD.get_VM(vbd)
-            data = {
-                'uuid': session.xenapi.VDI.get_uuid(vdi),
-                'name': session.xenapi.VDI.get_name_label(vdi),
-                'size': vdisize,
-                'human_size': humanize_bytes(vdisize),
-                'sr_uuid': session.xenapi.SR.get_uuid(vdisr),
-                'sr_name': session.xenapi.SR.get_name_label(vdisr),
-                'sr_type': session.xenapi.SR.get_type(vdisr),
-                'vm_uuid': session.xenapi.VM.get_uuid(vdivm),
-                'vm_name': session.xenapi.VM.get_name_label(vdivm),
-                'vm_dev': session.xenapi.VBD.get_userdevice(vbd),
-            }
-            vdi_list.append(data)
+        vdi_vm = session.xenapi.VBD.get_VM(vbd)
+        vdi = vbd_record['VDI']
+        vdi_sr = session.xenapi.VDI.get_SR(vdi)
+        vdi_record = session.xenapi.VDI.get_record(vdi)
 
-    return vdi_list
+        vdi_record['sr_vdi'] = session.xenapi.VDI.get_SR(vdi)
+        vdi_record['name'] = session.xenapi.VDI.get_name_label(vdi)
+        vdi_record['human_size'] = \
+            humanize_bytes(vdi_record['virtual_size'])
+        vdi_record['sr_uuid'] = session.xenapi.SR.get_uuid(vdi_sr)
+        vdi_record['sr_name'] = session.xenapi.SR.get_name_label(vdi_sr)
+        vdi_record['sr_type'] = session.xenapi.SR.get_type(vdi_sr)
+        vdi_record['vm_uuid'] = session.xenapi.VM.get_uuid(vdi_vm)
+        vdi_record['vm_name'] = session.xenapi.VM.get_name_label(vdi_vm)
+        vdi_record['vm_dev'] = session.xenapi.VBD.get_userdevice(vbd)
+
+    return vdi_record
 
 
 if __name__ == '__main__':
@@ -100,8 +98,8 @@ if __name__ == '__main__':
         script_name = sys.argv[0]
         usage = ('Usage: %s hostname username password')
         usage_ex = ('Ex.: %s 192.168.33.52 r00t foobar')
-        print(usage % script_name)
-        print(usage_ex % script_name)
+        print >>sys.stderr, (usage % script_name)
+        print >>sys.stderr, (usage_ex % script_name)
         sys.exit(1)
 
     host = sys.argv[1]
@@ -126,39 +124,43 @@ if __name__ == '__main__':
             'uuid',
             'power_state',
             'resident_on_hostname',
-            'VCPUs_max'
+            'VCPUs_max',
+            'memory_static_max',
+            'commessa',
         )
 
         disk_fields = (
             'uuid',
-            'size',
+            'virtual_size',
             'sr_name',
-            'sr_type'
+            'sr_type',
         )
 
         f_commessa = 'XenCenter.CustomFields.commessa'
 
         for vm in vms:
             if vm_filter(session, vm) is not None:
-                vm_dict = session.xenapi.VM.get_record(vm)
+                vm_record = session.xenapi.VM.get_record(vm)
 
-                vmhostref = vm_dict['resident_on']
+                vmhostref = vm_record['resident_on']
                 if vmhostref == 'OpaqueRef:NULL':
-                    vm_dict['resident_on_hostname'] = 'NULL'
+                    vm_record['resident_on_hostname'] = 'NULL'
                 else:
-                    vm_dict['resident_on_hostname'] = vmhostref = \
+                    vm_record['resident_on_hostname'] = vmhostref = \
                         session.xenapi.host.get_name_label(vmhostref)
 
-                if f_commessa in vm_dict['other_config']:
-                    vm_dict['commessa'] = vm_dict['other_config'][f_commessa]
+                if f_commessa in vm_record['other_config']:
+                    vm_record['commessa'] = \
+                        vm_record['other_config'][f_commessa]
                 else:
-                    vm_dict['commessa'] = 'NULL'
+                    vm_record['commessa'] = 'NULL'
 
                 for f in vm_fields:
-                    print('%-30s: %s' % ('vm_' + f.lower(), vm_dict[f]))
+                    print('%-30s: %s' % ('vm_' + f.lower(), vm_record[f]))
 
-                for vbd in vm_dict['VBDs']:
-                    for vdi in get_vdi_from_vbd(session, vbd):
+                for vbd in vm_record['VBDs']:
+                    vdi = get_vdi_from_vbd(session, vbd)
+                    if vdi:
                         for f in disk_fields:
                             print('%-30s: %s' % ('disk_' + f.lower(), vdi[f]))
 
