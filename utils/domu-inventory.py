@@ -10,7 +10,7 @@ import traceback
 
 
 __version__ = (0, 0, 1)
-__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+__author__ = 'Lorenzo Cocchi'
 
 
 def humanize_bytes(bytes):
