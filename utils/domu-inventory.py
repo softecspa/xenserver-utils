@@ -3,7 +3,7 @@
 try:
     import XenAPI
 except ImportError as e:
-    raise SystemExit('Import Error: %s' % e)
+    raise SystemExit('Error: %s' % e)
 
 import sys
 import traceback
@@ -66,9 +66,9 @@ def vm_filter(session, vm, power_state=None):
             return vm
 
 
-def get_vdi_from_vbd(session, vdb, vbd_type='Disk'):
+def get_vdi_from_vbd(session, vbd, vbd_type='Disk'):
     vdi_record = {}
-    vbd_record = session.xenapi.VBD.get_record(vdb)
+    vbd_record = session.xenapi.VBD.get_record(vbd)
 
     if vbd_record['type'] == vbd_type:
         vdi = vbd_record['VDI']
@@ -93,7 +93,7 @@ def get_vdi_from_vbd(session, vdb, vbd_type='Disk'):
     return vdi_record
 
 
-if __name__ == '__main__':
+def main():
     if len(sys.argv) < 3:
         script_name = sys.argv[0]
         usage = ('Usage: %s hostname username password')
@@ -173,3 +173,7 @@ if __name__ == '__main__':
             session.logut()
         except:
             pass
+
+
+if __name__ == '__main__':
+    main()
