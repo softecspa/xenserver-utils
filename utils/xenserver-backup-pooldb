@@ -39,7 +39,7 @@ EOF
 
 CONF="${1:-/usr/local/etc/$(basename $0).conf}"
 
-MOUNT_POINT="/var/backups"
+SR_MOUNT="/var/backups"
 MAX_DUMP="1,14"
 DIR_TARGET="pool-database"
 BACKUP_NAME="pool_db"
@@ -57,20 +57,19 @@ if [ -z "${POOL_MASTER_NAME}" ]; then
 fi
 
 if [ "${POOL_MASTER_NAME}" == "$(hostname)" ]; then
-    # mount options from /etc/fstab
-    if ! mount ${MOUNT_POINT} &>/dev/null; then
-        send_mail ${MAIL_TO} "ERROR" "mount: ${MOUNT_POINT}"
-        die
-    fi
+    #if ! mount ${SR_MOUNT} &>/dev/null; then
+    #    send_mail ${MAIL_TO} "ERROR" "mount: ${SR_MOUNT}"
+    #    die
+    #fi
 
-    cd "${MOUNT_POINT}/${DIR_TARGET}" &>/dev/null
+    cd "${SR_MOUNT}/${DIR_TARGET}" &>/dev/null
 
     if [ $? -ne 0 ]; then
-        send_mail ${MAIL_TO} "ERROR" "cd: ${MOUNT_POINT}/${DIR_TARGET}"
+        send_mail ${MAIL_TO} "ERROR" "cd: ${SR_MOUNT}/${DIR_TARGET}"
         die
     fi
 
-    if [ ${PWD} = "${MOUNT_POINT}/${DIR_TARGET}" ]; then
+    if [ ${PWD} = "${SR_MOUNT}/${DIR_TARGET}" ]; then
         xe pool-dump-database file-name=${BACKUP_NAME}_$(date +%F-%H%M%S)
         RETVAL=$?
         if [ $? -ne 0 ]; then
@@ -83,11 +82,12 @@ if [ "${POOL_MASTER_NAME}" == "$(hostname)" ]; then
         CANDIDATE="$(ls -t1 ${BACKUP_NAME}_* &>/dev/null | sed ${MAX_DUMP}d)"
         [ -n "${CANDIDATE}" ] && rm -f ${CANDIDATE} 2>/dev/null
     else
-        send_mail ${MAIL_TO} "ERROR" "${PWD} != ${MOUNT_POINT}/${DIR_TARGET}"
+        send_mail ${MAIL_TO} "ERROR" "${PWD} != ${SR_MOUNT}/${DIR_TARGET}"
     fi
 
     sync
-    cd /tmp && umount ${MOUNT_POINT}
+    #cd /tmp && umount ${SR_MOUNT}
+    cd /tmp
 fi
 
 # EOF
