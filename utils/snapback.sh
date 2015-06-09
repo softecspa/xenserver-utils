@@ -28,13 +28,19 @@
 #
 
 # Temporary snapshots will be use this as a suffix
-SNAPSHOT_SUFFIX=snapback
+SNAPSHOT_SUFFIX="snapback"
 # Temporary backup templates will use this as a suffix
-TEMP_SUFFIX=newbackup
+TEMP_SUFFIX="newbackup"
 # Temporary file
-TEMP=/tmp/snapback.$$
+TEMP="/tmp/snapback.$$"
 # UUID of the destination SR for backups
-DEST_SR=3be6f5c2-8828-8ed4-2c9b-db78a96b3a99
+DEST_SR="3be6f5c2-8828-8ed4-2c9b-db78a96b3a99"
+# slack
+SLACK_URL="https://xxx"
+SLACK_CHANNEL="#xxx"
+SLACK_USERNAME="xxx"
+# script name
+SELF=${0##*/}
 
 #
 # Don't modify below this line
@@ -42,7 +48,7 @@ DEST_SR=3be6f5c2-8828-8ed4-2c9b-db78a96b3a99
 
 log()
 {
-    logger -p daemon.debug -s -t $(date "+%F %T") $(basename $0)[$$]: -- "$@"
+    logger -p daemon.debug -s -t $(date "+%F %T") ${SELF}[$$]: -- "$@"
 }
 
 backup_schedule()
@@ -127,6 +133,13 @@ LOCKFILE=/tmp/snapback.lock
 
 if [ -f $LOCKFILE ]; then
     log "lockfile $LOCKFILE exists, exiting!"
+    curl -X POST -d \
+        "payload={
+            \"channel\": \"$SLACK_CHANNEL\",
+            \"username\": \"$SLACK_USERNAME\",
+            \"text\": \"$SELF: failed: lockfile $LOCKFILE exists, exiting!\"
+        }" \
+        $SLACK_URL
     exit 1
 fi
 
@@ -150,9 +163,11 @@ for VM in $RUNNING_VMS; do
 
     SCHEDULE=$(xe vm-param-get uuid=$VM param-name=other-config \
         param-key=XenCenter.CustomFields.backup)
+
     RETAIN=$(xe vm-param-get uuid=$VM param-name=other-config \
         param-key=XenCenter.CustomFields.retain)
-	# Not using this yet, as there are some bugs to be worked out...
+
+    # Not using this yet, as there are some bugs to be worked out...
     QUIESCE=$(xe vm-param-get uuid=$VM param-name=other-config \
         param-key=XenCenter.CustomFields.quiesce)
 
@@ -179,10 +194,11 @@ for VM in $RUNNING_VMS; do
 
     log "VM backup schedule: $BACKUP_SCHEDULE ($SCHEDULE)"
     log "VM retention: $RETAIN_NUMBER previous snapshots ($RETAIN)"
-
     log "checking snapshots for $VM_NAME"
+
     VM_SNAPSHOT_CHECK=$(xe snapshot-list \
         name-label=$VM_NAME-$SNAPSHOT_SUFFIX | xe_param uuid)
+
     if [ "$VM_SNAPSHOT_CHECK" != "" ]; then
         log "found old backup snapshot: $VM_SNAPSHOT_CHECK, Deleting..."
         delete_snapshot $VM_SNAPSHOT_CHECK
@@ -202,9 +218,23 @@ for VM in $RUNNING_VMS; do
 
     SNAPSHOT_UUID=$(xe $SNAPSHOT_CMD vm="$VM_NAME" \
         new-name-label="$VM_NAME-$SNAPSHOT_SUFFIX")
-    log "created snapshot with UUID: $SNAPSHOT_UUID"
 
-    log "copying snapshot to SR"
+    SNAPSHOT_UUID_RET=$?
+
+    if [ $SNAPSHOT_UUID_RET -ne 0 ]; then
+        log "failed: created snapshot"
+        curl -X POST -d \
+            "payload={
+                \"channel\": \"$SLACK_CHANNEL\",
+                \"username\": \"$SLACK_USERNAME\",
+                \"text\": \"$SELF: $VM_NAME: failed: created snapshot\"
+            }" \
+        $SLACK_URL
+        continue
+    fi
+
+    log "created snapshot with UUID: $SNAPSHOT_UUID"
+    log "copying snapshot with UUID: $SNAPSHOT_UUID to SR: $DEST_SR"
     # Check there isn't a stale template with TEMP_SUFFIX name hanging
     # around from a failed job
     TEMPLATE_TEMP="$(xe template-list name-label="$VM_NAME-$TEMP_SUFFIX" | \
@@ -214,12 +244,27 @@ for VM in $RUNNING_VMS; do
         log "found a stale temporary template, removing UUID $TEMPLATE_TEMP"
         delete_template $TEMPLATE_TEMP
     fi
+
     TEMPLATE_UUID=$(xe snapshot-copy uuid=$SNAPSHOT_UUID sr-uuid=$DEST_SR \
         new-name-description="Snapshot created on $(date)" \
         new-name-label="$VM_NAME-$TEMP_SUFFIX")
 
+    TEMPLATE_UUID_RET=$?
+
     log "removing temporary snapshot backup"
     delete_snapshot $SNAPSHOT_UUID
+
+    if [ $TEMPLATE_UUID_RET -ne 0 ]; then
+        log "failed: copy snapshot with UUID: $SNAPSHOT_UUID to SR: $DEST_SR"
+        curl -X POST -d \
+            "payload={
+                \"channel\": \"$SLACK_CHANNEL\",
+                \"username\": \"$SLACK_USERNAME\",
+                \"text\": \"$SELF: $VM_NAME: failed: copy snapshot to SR\"
+            }" \
+        $SLACK_URL
+        continue
+    fi
 
     # List templates for all VMs, grep for $VM_NAME-$BACKUP_SUFFIX
     # Sort -n, head -n -$RETAIN
@@ -251,7 +296,7 @@ for VM in $RUNNING_VMS; do
     xe template-param-set name-label="$VM_NAME-$BACKUP_SUFFIX-$BACKUP_DATE" \
         uuid=$TEMPLATE_UUID
 
-    log "backup for $VM_NAME finished"
+    log "backup for $VM_NAME successfully"
 done
 
 xe vdi-list sr-uuid=$DEST_SR > /var/run/sr-mount/$DEST_SR/mapping.txt
