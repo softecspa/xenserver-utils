@@ -1,14 +1,9 @@
-#!/usr/bin/python
-
-from __future__ import print_function
-
 try:
     import XenAPI
 except ImportError as e:
     raise SystemExit('Import Error: %s' % e.message)
 
-import logging
-import logging.handlers
+import liblogging
 import sys
 
 __version__ = (0, 0, 1)
@@ -23,14 +18,14 @@ class XenServer(object):
         self.username = username
         self.password = password
         self.host = host
-        self.log = self.__logging(
+        self.log = liblogging.setup_logging(
             name='XenServer',
             filename=log_file,
             log_level=log_level
         )
 
     def login(self):
-        """Returns boolean."""
+        """If failed login raise XenApi Exception, returns None"""
 
         try:
             self.session = XenAPI.Session('https://%s' % self.host)
@@ -48,42 +43,32 @@ class XenServer(object):
                 self.host = e.details[1]
             else:
                 self.log.exception('Failed login to %s' % e)
-                return False
+                raise
 
         self.log.info('Successfully login to %s' % self.host)
-        return True
 
     def logout(self):
-        """Returns boolean."""
+        """If failed logout raise XenApi Exception, returns None"""
 
         try:
             self.session.xenapi.session.logout()
         except Exception as e:
             self.log.exception('Logout from %s failed: %s' % (self.host, e))
-            return False
+            raise
 
-        self.log.info('Logout from %s: successfully' % self.host)
-        return True
+        self.log.info('Successfully logout to %s' % self.host)
 
-    def __vm_custom_fields(self, vm_record):
+    def __vm_resident_on_hostname(self, vm_host):
         """Returns dictionary."""
-
-        f_commessa = 'XenCenter.CustomFields.commessa'
-        vm_host = vm_record['resident_on']
+        d = {}
 
         if vm_host == 'OpaqueRef:NULL':
-            vm_record['resident_on_hostname'] = 'NULL'
+            d['resident_on_hostname'] = 'NULL'
         else:
-            vm_record['resident_on_hostname'] = \
+            d['resident_on_hostname'] = \
                 self.session.xenapi.host.get_name_label(vm_host)
 
-        if f_commessa in vm_record['other_config']:
-            vm_record['commessa'] = \
-                vm_record['other_config'][f_commessa]
-        else:
-            vm_record['commessa'] = 'NULL'
-
-        return vm_record
+        return d
 
     def vm_filter(self, vm, power_state=None):
         """Returns boolean."""
@@ -138,7 +123,10 @@ class XenServer(object):
             for vm in vms:
                 if self.vm_filter(vm, power_state) is True:
                     vm_record = self.session.xenapi.VM.get_record(vm)
-                    vm_record = self.__vm_custom_fields(vm_record)
+                    roh = self.__vm_resident_on_hostname(
+                            vm_record['resident_on']
+                    )
+                    vm_record.update(roh)
                     vdis = self.get_vdis_from_vbds(vm_record['VBDs'])
                     vm_record['VDIs'] = vdis
                     vm_list.append(vm_record)
@@ -207,113 +195,5 @@ class XenServer(object):
             self.log.exception('Error retreiving Pool name: %s' % str(e))
             raise
 
-    def __logging(self, name=None, filename=None, filemode='a',
-                  log_level='INFO', fmt=None, datefmt=None, rotate=False,
-                  rotate_max_bytes=1024, rotate_backup_count=10):
-
-        logger = logging.getLogger(name)
-
-        if fmt is None:
-            fmt = \
-                '%(asctime)s [%(levelname)s] %(name)s.%(module)s: %(message)s'
-
-        formatter = logging.Formatter(fmt, datefmt)
-
-        if filename is True or filename is False:
-            raise ValueError('filename should not be boolean')
-
-        if filename is None:
-            # sys.stderr
-            handler = logging.StreamHandler()
-        elif filename == '-':
-            handler = logging.StreamHandler(sys.stdout)
-        elif filename and filename != '-':
-            if rotate is False:
-                handler = logging.FileHandler(filename, mode=filemode)
-            else:
-                handler = logging.handlers.RotatingFileHandler(
-                    filename,
-                    mode=filemode,
-                    maxBytes=rotate_max_bytes,
-                    backupCount=rotate_backup_count
-                )
-        else:
-            handler = logging.NullHandler()
-
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        logger.setLevel(getattr(logging, log_level))
-
-        return logger
-
     # def __del__(self):
     #    self.logout()
-
-
-def main():
-    if len(sys.argv) < 3:
-        usage = ('Usage: %s hostname username password' % sys.argv[0])
-        usage_ex = ('Ex.: %s 192.168.33.52 r00t foobar' % sys.argv[0])
-        raise SystemExit('%s\n%s' % (usage, usage_ex))
-
-    host = sys.argv[1]
-    username = sys.argv[2]
-    password = sys.argv[3]
-
-    vm_fields = (
-        'name_label',
-        'uuid',
-        'power_state',
-        'resident_on_hostname',
-        'VCPUs_max',
-        'memory_static_max',
-        'commessa',
-    )
-
-    disk_fields = (
-        'uuid',
-        'name_description',
-        'name_label',
-        'virtual_size',
-        'physical_utilisation',
-    )
-
-    sr_fields = (
-        'name_label',
-        'physical_size',
-        'physical_utilisation'
-    )
-
-    xen = XenServer(host, username, password)
-
-    if xen.login() is True:
-        try:
-            print('%-30s: %s' % ('Pool Master', xen.get_pool_master()))
-            print('%-30s: %s' % ('Pool Name', xen.get_pool_name()))
-            print()
-            for vm in xen.get_vm_list():
-                for f in vm_fields:
-                    print('%-30s: %s' % ('vm_' + f.lower(), vm[f]))
-
-                vdis = vm['VDIs']
-                print('%-30s: %s' % ('vm_vdis', len(vdis)))
-                print(end='\n')
-
-                for vdi in vdis:
-                    for f in disk_fields:
-                        print('%-30s: %s' % ('disk_' + f.lower(), vdi[f]))
-
-                    sr = vdi['SR']
-                    for f in sr_fields:
-                        print('%-30s: %s' % ('sr_' + f.lower(), sr[f]))
-
-                    print(end='\n')
-
-                print(end='\n')
-        except Exception as e:
-            raise SystemExit('%s' % e)
-        finally:
-            xen.logout()
-
-if __name__ == '__main__':
-    main()
