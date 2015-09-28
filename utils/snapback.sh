@@ -1,55 +1,76 @@
 #!/bin/bash
 
-# Simple script to create regular snapshot-based backups for Citrix Xenserver
-# Cocchi Lorenzo <lorenzo.cocchi@softecspa.it>
-# Original idea from  Mark Round, scripts@markround.com
-#  http://www.markround.com/snapback
-#
-# version 1.4:
-#  add daily sheduling and retention selective scheduling
+help()
+{
+    cat <<EOF
+Simple script to create regular snapshot-based backups for Citrix Xenserver
+Cocchi Lorenzo <lorenzo.cocchi@softecspa.it>
+Original idea from:
+    Mark Round, scripts@markround.com
+    http://www.markround.com/snapback
 
-# Usage:
-#
-# [root@xenserver ~]# xe vm-list name-label=vm_name params=uuid --minimal
-# 95b7ae99-e66b-aac4-8851-a0ceaaef4292
-#
-# [root@xenserver ~]# xe vm-param-set \
-#    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292 \
-#    other-config:XenCenter.CustomFields.schedule="daily,weekly,monthly"
-#
-# [root@xenserver ~]# xe vm-param-set \
-#    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292 \
-#    other-config:XenCenter.CustomFields.retain="daily=2,weekly=1,monthly=1"
-#
-# [root@xenserver ~]# ./snapback.sh
+Version 1.4:
 
-#
-# Variables
-#
+Usage:
 
-# Temporary snapshots will be use this as a suffix
-SNAPSHOT_SUFFIX="snapback"
-# Temporary backup templates will use this as a suffix
-TEMP_SUFFIX="newbackup"
-# Temporary file
-TEMP="/tmp/snapback.$$"
+[root@xen ~]# xe vm-list name-label=vm_name params=uuid --minimal
+95b7ae99-e66b-aac4-8851-a0ceaaef4292
 
-# UUID of the destination SR for template backups
-TMPL_SR="3be6f5c2-8828-8ed4-2c9b-db78a96b3a99"
-# mount point of the destination SR for xva backups
-XVA_SR="/var/run/sr-mount/3be6f5c2-8828-8ed4-2c9b-db78a96b3a99"
+[root@xen ~]# xe vm-param-set
+    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292
+    other-config:XenCenter.CustomFields.backup_schedule="daily,weekly,monthly"
 
-# slack
-SLACK_URL="https://hooks.slack.com/services/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"
-SLACK_CHANNEL="#ops"
-SLACK_USERNAME="webhookbot"
+[root@xen ~]# xe vm-param-set
+    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292
+    other-config:XenCenter.CustomFields.backup_retain="daily=2,weekly=1,monthly=1"
 
-# script name
-SELF=${0##*/}
+# default value=3
+[root@xen ~]# xe vm-param-set
+    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292
+    other-config:XenCenter.CustomFields.backup_retain_xva="2"
 
-#
-# Don't modify below this line
-#
+# optional, true, false or empty
+[root@xen ~]# xe vm-param-set
+    uuid=95b7ae99-e66b-aac4-8851-a0ceaaef4292
+    other-config:XenCenter.CustomFields.backup_quiesce="true"
+
+[root@xen ~]# echo "mounted" > /var/run/sr-mount/SR-UUID/.snapback
+
+# dry-run mode
+[root@xen ~]# ./snapback.sh -f ./snapback.conf -d
+
+[root@xen ~]# ./snapback.sh -f ./snapback.conf
+EOF
+}
+
+while getopts :f:dh OPT; do
+    case ${OPT} in
+        d)
+            DRYRUN="true"
+            ;;
+        f)
+            CONF="${OPTARG}"
+            ;;
+
+        h)
+            help
+            exit 0
+            ;;
+        \?)
+            "ERROR: invalid option: -${OPTARG}"
+            exit 1
+            ;;
+        :)
+            echo "ERROR: option -$OPTARG requires an argument..."
+            exit 1
+            ;;
+     esac
+done
+
+shift $((OPTIND -1))
+
+[ -z "$CONF" ] && { help; exit 1; }
+. "$CONF" 2>/dev/null || { echo "ERROR: $CONF: No such file"; exit 1; }
 
 log()
 {
@@ -138,13 +159,13 @@ slack_msg()
 {
     local MSG=$1
 
-    curl -X POST -d \
+    curl -s -X POST -d \
         "payload={
             \"channel\": \"$SLACK_CHANNEL\",
             \"username\": \"$SLACK_USERNAME\",
             \"text\": \"$SELF: $MSG\"
         }" \
-        $SLACK_URL
+        $SLACK_URL -o /dev/null
 }
 
 check_sr_mount()
@@ -173,7 +194,7 @@ check_sr_mount()
 LOCKFILE=/tmp/snapback.lock
 
 if [ -f $LOCKFILE ]; then
-    log "lockfile $LOCKFILE exists, exiting!"
+    log "failed: lockfile $LOCKFILE exists, exiting!"
     slack_msg "failed: lockfile $LOCKFILE exists, exiting!"
     exit 1
 fi
@@ -196,7 +217,7 @@ touch $LOCKFILE
 # Date format must be %Y%m%d so we can sort them
 BACKUP_DATE=$(date +"%Y%m%d")
 
-log "snapshot backup started"
+log "XenServer backup started (pid $$)"
 
 # Get all running VMs
 # todo: Need to check this works across a pool
@@ -206,63 +227,76 @@ RUNNING_VMS=$(xe vm-list power-state=running is-control-domain=false | \
 for VM in $RUNNING_VMS; do
     VM_NAME="$(xe vm-list uuid=$VM | xe_param name-label)"
 
-    log "backup for $VM_NAME started"
-    log "retrieving backup paramaters"
+    log "$VM_NAME: backup started"
+    log "$VM_NAME: retrieving backup paramaters"
 
     SCHEDULE=$(xe vm-param-get uuid=$VM param-name=other-config \
-        param-key=XenCenter.CustomFields.backup)
+        param-key=XenCenter.CustomFields.backup_schedule 2>/dev/null)
 
     RETAIN=$(xe vm-param-get uuid=$VM param-name=other-config \
-        param-key=XenCenter.CustomFields.retain)
+        param-key=XenCenter.CustomFields.backup_retain 2>/dev/null)
+
+    RETAIN_XVA=$(xe vm-param-get uuid=$VM param-name=other-config \
+        param-key=XenCenter.CustomFields.backup_retain_xva 2>/dev/null)
 
     # Not using this yet, as there are some bugs to be worked out...
     QUIESCE=$(xe vm-param-get uuid=$VM param-name=other-config \
-        param-key=XenCenter.CustomFields.quiesce)
+        param-key=XenCenter.CustomFields.backup_quiesce 2>/dev/null)
 
     if [[ "$SCHEDULE" == "" || "$RETAIN" == "" ]]; then
-        log "no schedule or retention set, skipping this VM"
+        log "$VM_NAME: no schedule or retention set, skip"
         continue
     fi
+
+    [ "$RETAIN_XVA" == "" ] && RETAIN_XVA=0
 
     BACKUP_SCHEDULE=$(backup_schedule $SCHEDULE)
 
     if [ -z "$BACKUP_SCHEDULE" ]; then
-        log "no schedule set, skipping this VM"
+        log "$VM_NAME: no schedule set, skip"
         continue
     fi
 
     RETAIN_NUMBER=$(retain_number $RETAIN $BACKUP_SCHEDULE)
 
     if [ -z "$RETAIN_NUMBER" ]; then
-        log "no retain set, skipping this VM"
+        log "$VM_NAME: no retain set, skip"
         continue
     fi
 
     BACKUP_SUFFIX="backup-${BACKUP_SCHEDULE}"
 
-    log "VM backup schedule: $BACKUP_SCHEDULE ($SCHEDULE)"
-    log "VM retention: $RETAIN_NUMBER previous snapshots ($RETAIN)"
-    log "checking snapshots for $VM_NAME"
+    log "$VM_NAME: backup_schedule: $BACKUP_SCHEDULE ($SCHEDULE)"
+    log "$VM_NAME: backup_retention: $RETAIN_NUMBER previous snap ($RETAIN)"
+    log "$VM_NAME: backup_retention_xva: $RETAIN_XVA"
+    log "$VM_NAME: backup_quiesce: $QUIESCE"
+
+    if [ "x$DRYRUN" == "xtrue" ]; then
+        log "$VM_NAME: dry-run mode, continue without backup"
+        continue
+    fi
+
+    log "$VM_NAME: checking snapshots"
 
     VM_SNAPSHOT_CHECK=$(xe snapshot-list \
         name-label=$VM_NAME-$SNAPSHOT_SUFFIX | xe_param uuid)
 
     if [ "$VM_SNAPSHOT_CHECK" != "" ]; then
         for SNAPSHOT in $VM_SNAPSHOT_CHECK; do
-            log "found old backup snapshot with UUID: $SNAPSHOT, Deleting..."
+            log "$VM_NAME: found old snapshot $SNAPSHOT, deleting..."
             delete_snapshot $SNAPSHOT
         done
     fi
-    
-    log "creating snapshot backup"
+
+    log "$VM_NAME: creating snapshot backup"
 
     # Select appropriate snapshot command
     # See above - not using this yet, as have to work around failures
     if [ "$QUIESCE" == "true" ]; then
-       log "using VSS plugin"
+       log "$VM_NAME: using VSS plugin"
        SNAPSHOT_CMD="vm-snapshot-with-quiesce"
     else
-       log "not using VSS plugin, disks will not be quiesced"
+       log "$VM_NAME: not using VSS plugin, disks will not be quiesced"
        SNAPSHOT_CMD="vm-snapshot"
     fi
 
@@ -272,7 +306,7 @@ for VM in $RUNNING_VMS; do
     SNAPSHOT_UUID_RET=$?
 
     if [ $SNAPSHOT_UUID_RET -ne 0 ]; then
-        log "failed: created snapshot"
+        log "$VM_NAME: failed created snapshot"
         slack_msg "$VM_NAME: failed: created snapshot"
         continue
     fi
@@ -286,7 +320,7 @@ for VM in $RUNNING_VMS; do
 
     if [ "$TEMPLATE_TEMP" != "" ]; then
         for TEMPLATE in $TEMPLATE_TEMP; do
-            log "found a stale temporary template, removing UUID: $TEMPLATE"
+            log "$VM_NAME: found stale temporary template, removing $TEMPLATE"
             delete_template $TEMPLATE
         done
     fi
@@ -298,47 +332,61 @@ for VM in $RUNNING_VMS; do
     TEMPLATE_UUID_RET=$?
 
     if [ $TEMPLATE_UUID_RET -ne 0 ]; then
-        log "failed: copy snapshot with UUID: $SNAPSHOT_UUID to SR: $TMPL_SR"
+        log "$VM_NAME: failed: copy snapshot $SNAPSHOT_UUID to SR $TMPL_SR"
         slack_msg \
-            "failed: copy snapshot with UUID: $SNAPSHOT_UUID to SR: $TMPL_SR"
+            "failed: copy snapshot $SNAPSHOT_UUID to SR $TMPL_SR"
 
-        log "removing temporary snapshot backup with UUID: $SNAPSHOT_UUID"
+        log "$VM_NAME: removing temporary snapshot backup $SNAPSHOT_UUID"
         slack_msg \
-            "removing temporary snapshot backup with UUID: $SNAPSHOT_UUID"
+            "removing temporary snapshot backup $SNAPSHOT_UUID"
         delete_snapshot $SNAPSHOT_UUID
 
         continue
     fi
 
-    unset BACKUP_DIR
-    BACKUP_DIR=${XVA_SR}/${VM_NAME}
+    if [ "$RETAIN_XVA" -ne 0 ]; then
+        unset BACKUP_DIR
+        BACKUP_DIR=${XVA_SR}/${VM_NAME}
 
-    if [ ! -d $BACKUP_DIR ]; then
-        mkdir -p $BACKUP_DIR
-        log "create $BACKUP_DIR"
+        if [ ! -d $BACKUP_DIR ]; then
+            mkdir -p $BACKUP_DIR
+            log "$VM_NAME: create $BACKUP_DIR"
+        fi
+
+        unset VM_FILENAME
+        VM_FILENAME=${BACKUP_DIR}/${VM_NAME}-${BACKUP_DATE}.xva
+
+        log "$VM_NAME: export to $VM_FILENAME"
+        xe vm-export vm=$SNAPSHOT_UUID filename=$VM_FILENAME
+        VM_EXPORT_RET=$?
+
+        if [ $VM_EXPORT_RET -ne 0 ]; then
+            log "$VM_NAME: failed export to $VM_FILENAME"
+            slack_msg "failed: export $VM_NAME to $VM_FILENAME"
+            continue
+        fi
+
+        log "$VM_NAME: checking for removing old XVA"
+
+        # Remove old XVA
+        OLD_XVA=$(ls -tr1 ${BACKUP_DIR} | head -n-${RETAIN_XVA})
+        for XVA in ${OLD_XVA}; do
+            log "$VM_NAME: delete old ${BACKUP_DIR}/${XVA}"
+            rm -f "${BACKUP_DIR}/${XVA}"
+        done
+
+    else
+        log "$VM_NAME: XVA no retain set, skip"
     fi
 
-    unset VM_FILENAME
-    VM_FILENAME=${BACKUP_DIR}/${VM_NAME}-${BACKUP_DATE}.xva
-
-    log "export $VM_NAME to $VM_FILENAME"
-    xe vm-export vm=$SNAPSHOT_UUID filename=$VM_FILENAME
-    VM_EXPORT_RET=$?
-
-    log "removing temporary snapshot backup with UUID: $SNAPSHOT_UUID"
+    log "$VM_NAME: removing temporary snapshot backup $SNAPSHOT_UUID"
     delete_snapshot $SNAPSHOT_UUID
-
-    if [ $VM_EXPORT_RET -ne 0 ]; then
-        log "failed: export $VM_NAME to $VM_FILENAME"
-        slack_msg "failed: export $VM_NAME to $VM_FILENAME"
-        continue
-    fi
 
     # List templates for all VMs, grep for $VM_NAME-$BACKUP_SUFFIX
     # Sort -n, head -n -$RETAIN
     # Loop through and remove each one
 
-    log "removing old backups"
+    log "$VM_NAME: checking for removing old backups"
     xe template-list | grep "$VM_NAME-$BACKUP_SUFFIX" | \
         xe_param name-label | sort -n | head -n-$RETAIN_NUMBER > $TEMP
 
@@ -346,7 +394,7 @@ for VM in $RUNNING_VMS; do
     do
         OLD_TEMPLATE_UUID=$(xe template-list name-label="$OLD_TEMPLATE" | \
             xe_param uuid)
-        log "removing : $OLD_TEMPLATE with UUID $OLD_TEMPLATE_UUID"
+        log "$VM_NAME: removing $OLD_TEMPLATE with UUID $OLD_TEMPLATE_UUID"
         delete_template $OLD_TEMPLATE_UUID
     done < $TEMP
 
@@ -356,21 +404,23 @@ for VM in $RUNNING_VMS; do
     TODAYS_TEMPLATE="$(xe template-list \
         name-label="$VM_NAME-$BACKUP_SUFFIX-$BACKUP_DATE" | xe_param uuid)"
     if [ "$TODAYS_TEMPLATE" != "" ]; then
-        log "found a template already for today, removing UUID $TODAYS_TEMPLATE"
+        log "$VM_NAME: found a template already for today, removing $TODAYS_TEMPLATE"
         delete_template $TODAYS_TEMPLATE
     fi
 
-    log "renaming template"
+    log "$VM_NAME: renaming template"
     xe template-param-set name-label="$VM_NAME-$BACKUP_SUFFIX-$BACKUP_DATE" \
         uuid=$TEMPLATE_UUID
 
-    log "backup for $VM_NAME successfully"
+    log "$VM_NAME: backup successfully"
+    log "sleeping for 30s"
+    sleep 30
 done
 
 xe vdi-list sr-uuid=$TMPL_SR > /var/run/sr-mount/$TMPL_SR/mapping.txt
 xe vbd-list > /var/run/sr-mount/$TMPL_SR/vbd-mapping.txt
 
-log "snapshot backup finished"
+log "XenServer backup finished"
 
 [ -e $TEMP ] && rm $TEMP
 rm $LOCKFILE

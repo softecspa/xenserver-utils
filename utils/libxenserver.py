@@ -4,7 +4,6 @@ except ImportError as e:
     raise SystemExit('Import Error: %s' % e.message)
 
 import liblogging
-import sys
 
 __version__ = (0, 0, 1)
 __author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
@@ -70,11 +69,14 @@ class XenServer(object):
 
         return d
 
-    def vm_filter(self, vm, power_state=None):
+    def vm_filter(self, vm, power_state=None, is_control_domain=False,
+                  is_a_snapshot=False, is_a_template=False):
         """Returns boolean."""
-        if (self.session.xenapi.VM.get_is_control_domain(vm) is False and
-                self.session.xenapi.VM.get_is_a_template(vm) is False and
-                self.session.xenapi.VM.get_is_a_snapshot(vm) is False):
+
+        if (self.session.xenapi.VM.get_is_control_domain(vm) is
+                is_control_domain and
+            self.session.xenapi.VM.get_is_a_snapshot(vm) is is_a_snapshot and
+                self.session.xenapi.VM.get_is_a_template(vm) is is_a_template):
 
             if power_state is None:
                 return True
@@ -112,7 +114,8 @@ class XenServer(object):
 
         return vdi_list
 
-    def get_vm_list(self, power_state=None):
+    def get_vm_list(self, power_state=None, is_control_domain=False,
+                    is_a_snapshot=False, is_a_template=False):
         """Returns list of dictionary."""
 
         vm_list = []
@@ -121,7 +124,8 @@ class XenServer(object):
             vms = self.session.xenapi.VM.get_all()
 
             for vm in vms:
-                if self.vm_filter(vm, power_state) is True:
+                if self.vm_filter(vm, power_state=power_state,
+                                  is_a_template=is_a_template) is True:
                     vm_record = self.session.xenapi.VM.get_record(vm)
                     roh = self.__vm_resident_on_hostname(
                             vm_record['resident_on']
@@ -136,7 +140,7 @@ class XenServer(object):
             self.log.exception('Error retreiving VM list by host: %s' % e)
             raise
 
-    def get_simple_vm_list(self, power_state=None):
+    def get_simple_vm_list(self, power_state=None, is_a_template=False):
         """Returns dictionary."""
 
         vm_list = {}
